@@ -205,7 +205,7 @@ main(int argc, char **argv)
                 case ENETDOWN:
                     break;
                 default:
-                    perror("send(packet)");
+                    perror("send");
                     return 1;
                 }
             }

@@ -1,16 +1,17 @@
 CC     = cc
 CFLAGS = -Wall -O2 -Wextra
 prefix = /usr/local
+PREFIX = $(prefix)
 
 arply:
 	$(CC) $(CFLAGS) $(CPPFLAGS) $(LDFLAGS) arply.c -o arply
 
 install: arply
-	mkdir -p $(DESTDIR)$(prefix)/bin
-	mv -f arply $(DESTDIR)$(prefix)/bin
+	mkdir -p $(DESTDIR)$(PREFIX)/bin
+	mv -f arply $(DESTDIR)$(PREFIX)/bin
 
 uninstall:
-	rm -f $(DESTDIR)$(prefix)/bin/arply
+	rm -f $(DESTDIR)$(PREFIX)/bin/arply
 
 clean:
 	rm -f arply
