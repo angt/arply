@@ -33,8 +33,8 @@ union arply_pkt {
 
 struct arply {
     int fd;
-    struct arply_addr addr;
     unsigned index;
+    unsigned char ll[ETH_ALEN];
 };
 
 static void
@@ -44,7 +44,7 @@ arply_sa_handler()
 }
 
 static int
-arply_init(struct arply *arply, char *name, char *ip)
+arply_init(struct arply *arply, char *name)
 {
     struct ifreq ifr;
     memset(&ifr, 0, sizeof(ifr));
@@ -66,13 +66,8 @@ arply_init(struct arply *arply, char *name, char *ip)
         fprintf(stderr, "Unable to find the hwaddr of %s\n", ifr.ifr_name);
         return 1;
     }
-    memcpy(&arply->addr.ll,
-           &ifr.ifr_hwaddr.sa_data, ETH_ALEN);
+    memcpy(&arply->ll, &ifr.ifr_hwaddr.sa_data, ETH_ALEN);
 
-    if (inet_pton(AF_INET, ip, &arply->addr.ip) != 1) {
-        fprintf(stderr, "Unable to parse ip %s\n", ip);
-        return 1;
-    }
     return 0;
 }
 
@@ -147,27 +142,45 @@ arply_set_signal(void)
     sigaction(SIGHUP, &sa, NULL);
 }
 
+static uint32_t
+ipmask(unsigned char a[4], uint32_t mask)
+{
+    uint32_t tmp;
+    memcpy(&tmp, a, 4);
+    return tmp & mask;
+}
+
 int
 main(int argc, char **argv)
 {
     arply_set_signal();
 
-    if (argc != 3) {
-        printf("usage: %s IFNAME IP\n", argv[0]);
+    if (argc < 3 || argc > 4) {
+        printf("usage: %s IFNAME IP [MASK]\n", argv[0]);
         return 1;
     }
+    uint32_t ip = 0;
+    uint32_t mask = -1;
     struct arply arply;
 
-    if (arply_init(&arply, argv[1], argv[2]))
+    if (inet_pton(AF_INET, argv[2], &ip) != 1) {
+        fprintf(stderr, "Unable to parse ip %s\n", argv[2]);
+        return 1;
+    }
+    if (argc == 4 && inet_pton(AF_INET, argv[3], &mask) != 1) {
+        fprintf(stderr, "Unable to parse mask %s\n", argv[3]);
+        return 1;
+    }
+    ip &= mask;
+
+    if (arply_init(&arply, argv[1]))
         return 1;
 
     printf("Start replying ARP Request:\n"
-           " src %02x:%02x:%02x:%02x:%02x:%02x ip %d.%d.%d.%d\n",
-           arply.addr.ll[0], arply.addr.ll[1],
-           arply.addr.ll[2], arply.addr.ll[3],
-           arply.addr.ll[4], arply.addr.ll[5],
-           arply.addr.ip[0], arply.addr.ip[1],
-           arply.addr.ip[2], arply.addr.ip[3]);
+           " src %02x:%02x:%02x:%02x:%02x:%02x\n",
+           arply.ll[0], arply.ll[1],
+           arply.ll[2], arply.ll[3],
+           arply.ll[4], arply.ll[5]);
 
     if (arply_listen(&arply))
         return 1;
@@ -189,13 +202,16 @@ main(int argc, char **argv)
             continue;
         }
         if ((fd.revents & POLLIN) && !arply_recv(&arply, &pkt)) {
-            if (memcmp(pkt.x.t.ip, arply.addr.ip, sizeof(pkt.x.t.ip)))
+            if (ipmask(pkt.x.t.ip, mask) != ip)
                 continue;
 
+            unsigned char tmp[4];
+            memcpy(&tmp, &pkt.x.t.ip, sizeof(tmp));
             memcpy(&pkt.x.t, &pkt.x.s, sizeof(pkt.x.t));
-            memcpy(&pkt.x.s, &arply.addr, sizeof(pkt.x.s));
+            memcpy(&pkt.x.s.ll, &arply.ll, sizeof(pkt.x.s.ll));
+            memcpy(&pkt.x.s.ip, &tmp, sizeof(pkt.x.s.ip));
             memcpy(pkt.x.eth.h_dest, pkt.x.eth.h_source, sizeof(pkt.x.eth.h_dest));
-            memcpy(pkt.x.eth.h_source, arply.addr.ll, sizeof(pkt.x.eth.h_source));
+            memcpy(pkt.x.eth.h_source, &arply.ll, sizeof(pkt.x.eth.h_source));
             pkt.x.arp.ar_op = htons(ARPOP_REPLY);
 
             if (send(arply.fd, &pkt.x, sizeof(pkt.x), 0) == -1) {
