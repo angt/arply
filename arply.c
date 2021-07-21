@@ -1,14 +1,13 @@
 #define _GNU_SOURCE
 
-#include <arpa/inet.h>
 #include <errno.h>
+#include <netinet/in.h>
 #include <poll.h>
 #include <signal.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/ioctl.h>
-#include <unistd.h>
-#include <netinet/in.h>
 
 #include <linux/filter.h>
 #include <linux/if_arp.h>
@@ -150,26 +149,82 @@ ipmask(unsigned char a[4], uint32_t mask)
     return tmp & mask;
 }
 
+static const char *
+uparse(const char *s, unsigned *ret, unsigned n)
+{
+    int i = 0;
+    unsigned v = 0;
+
+    for (i = 0; v <= n && s[i] >= '0' && s[i] <= '9'; i++)
+        v = 10 * v + s[i] - '0';
+
+    if (i && v <= n)
+        *ret = v;
+
+    return s + i;
+}
+
+static const char *
+cparse(const char *s, char c)
+{
+    return s + (s[0] == c);
+}
+
+static const char *
+ipparse(const char *s, uint32_t *ret)
+{
+    unsigned i0 = 256, i1 = 256, i2 = 256, i3 = 256;
+
+    s = cparse(uparse(s, &i0, 255), '.');
+    s = cparse(uparse(s, &i1, 255), '.');
+    s = cparse(uparse(s, &i2, 255), '.');
+    s = uparse(s, &i3, 255);
+
+    if (i0 < 256 && i1 < 256 && i2 < 256 && i3 < 256)
+        *ret = i3 << 24 | i2 << 16 | i1 << 8 | i0;
+
+    return s;
+}
+
 int
 main(int argc, char **argv)
 {
     arply_set_signal();
 
     if (argc < 3 || argc > 4) {
-        printf("usage: %s IFNAME IP [MASK]\n", argv[0]);
+        printf("usage: %s IFNAME { IP[/CIDR] | IP [MASK] }\n", argv[0]);
         return 1;
     }
     uint32_t ip = 0;
-    uint32_t mask = -1;
+    unsigned cidr = 0;
+    uint32_t mask = 0;
     struct arply arply;
 
-    if (inet_pton(AF_INET, argv[2], &ip) != 1) {
+    const char *s = ipparse(argv[2], &ip);
+    int have_cidr = s[0] == '/';
+
+    if (!ip || (s[0] && !have_cidr)) {
         fprintf(stderr, "Unable to parse ip %s\n", argv[2]);
         return 1;
     }
-    if (argc == 4 && inet_pton(AF_INET, argv[3], &mask) != 1) {
-        fprintf(stderr, "Unable to parse mask %s\n", argv[3]);
+    if (have_cidr && (uparse(s + 1, &cidr, 32)[0] || !cidr)) {
+        fprintf(stderr, "Unable to parse CIDR %s\n", s);
         return 1;
+    }
+    if (argc == 4) {
+        if (have_cidr) {
+            fprintf(stderr, "Mask, or CIDR, that is the question...\n");
+            return 1;
+        }
+        if (ipparse(argv[3], &mask)[0] || !mask) {
+            fprintf(stderr, "Unable to parse mask %s\n", argv[3]);
+            return 1;
+        }
+    }
+    if (!mask) {
+        mask = UINT32_MAX;
+        if (cidr > 0 && cidr < 32)
+            mask = htonl(mask << (32 - cidr));
     }
     ip &= mask;
 
